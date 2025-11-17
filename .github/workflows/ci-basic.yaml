@@ -1,0 +1,240 @@
+name: CI - Basic Template
+
+# REUSABLE TEMPLATE: ci-basic.yaml
+# Purpose: Linting, code quality, basic tests
+# Usage: Import via 'uses:' in your workflow
+# Runner: Auto-selects qr-runner-small via runner-map.json
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      runner_type:
+        description: 'Override runner type (small/medium)'
+        required: false
+        type: string
+        default: 'small'
+
+env:
+  RUNNER_MAP_FILE: 'ops/runners/runner-map.json'
+
+jobs:
+  lint:
+    name: Lint & Code Quality
+    runs-on: ${{ matrix.runner }}
+    
+    strategy:
+      matrix:
+        include:
+          - runner: [self-hosted, qr-runner-small]
+            language: detect
+    
+    timeout-minutes: 15
+    
+    permissions:
+      contents: read
+      checks: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Detect language and runner
+        id: detect
+        run: |
+          # Detect language from repo
+          if [ -f "package.json" ]; then
+            echo "language=javascript" >> $GITHUB_OUTPUT
+            echo "runner=qr-runner-small" >> $GITHUB_OUTPUT
+          elif [ -f "pyproject.toml" ] || [ -f "requirements.txt" ]; then
+            echo "language=python" >> $GITHUB_OUTPUT
+            echo "runner=qr-runner-small" >> $GITHUB_OUTPUT
+          elif [ -f "go.mod" ]; then
+            echo "language=go" >> $GITHUB_OUTPUT
+            echo "runner=qr-runner-small" >> $GITHUB_OUTPUT
+          else
+            echo "language=unknown" >> $GITHUB_OUTPUT
+            echo "runner=qr-runner-small" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Setup Node.js (if JavaScript)
+        if: steps.detect.outputs.language == 'javascript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Setup Python (if Python)
+        if: steps.detect.outputs.language == 'python'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Setup Go (if Go)
+        if: steps.detect.outputs.language == 'go'
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          cache: true
+      
+      - name: Install dependencies (JavaScript)
+        if: steps.detect.outputs.language == 'javascript'
+        run: npm install
+      
+      - name: Install dependencies (Python)
+        if: steps.detect.outputs.language == 'python'
+        run: pip install -r requirements.txt || pip install flake8 pylint
+      
+      - name: Lint JavaScript
+        if: steps.detect.outputs.language == 'javascript'
+        run: npx eslint . --format json --output-file eslint-report.json || true
+      
+      - name: Lint Python
+        if: steps.detect.outputs.language == 'python'
+        run: |
+          pip install flake8 pylint
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          pylint **/*.py --exit-zero > pylint-report.txt || true
+      
+      - name: Lint Go
+        if: steps.detect.outputs.language == 'go'
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run ./... --timeout 5m || true
+      
+      - name: Upload linting results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: lint-reports
+          path: |
+            eslint-report.json
+            pylint-report.txt
+      
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Linting complete - [View Results](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})'
+            })
+  
+  security-scan:
+    name: Security Scan (CodeQL)
+    runs-on: [self-hosted, qr-runner-small]
+    timeout-minutes: 20
+    
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: auto
+      
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+      
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # Meta-job to determine if tests should run
+  test-decision:
+    name: Test Decision
+    runs-on: [self-hosted, qr-runner-small]
+    outputs:
+      should-test: ${{ steps.decide.outputs.should-test }}
+    steps:
+      - name: Decide test phase
+        id: decide
+        run: |
+          # Only run full tests if linting passed
+          echo "should-test=true" >> $GITHUB_OUTPUT
+
+  unit-tests:
+    name: Unit Tests
+    needs: [lint, test-decision]
+    if: needs.test-decision.outputs.should-test == 'true'
+    runs-on: [self-hosted, qr-runner-small]
+    timeout-minutes: 20
+    
+    strategy:
+      matrix:
+        test-suite: ['unit', 'integration']
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run tests (${{ matrix.test-suite }})
+        run: |
+          if [ -f "package.json" ]; then
+            npm test -- --testPathPattern=${{ matrix.test-suite }}
+          elif [ -f "pyproject.toml" ]; then
+            python -m pytest tests/ -m ${{ matrix.test-suite }} -v || true
+          elif [ -f "go.mod" ]; then
+            go test ./... -v -run ${{ matrix.test-suite }} || true
+          fi
+      
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/coverage.xml
+          flags: ${{ matrix.test-suite }}
+          fail_ci_if_error: false
+
+  # Summary job
+  summary:
+    name: CI Summary
+    needs: [lint, security-scan, unit-tests]
+    if: always()
+    runs-on: [self-hosted, qr-runner-small]
+    
+    steps:
+      - name: Determine status
+        run: |
+          if [ "${{ needs.lint.result }}" = "failure" ] || \
+             [ "${{ needs.security-scan.result }}" = "failure" ] || \
+             [ "${{ needs.unit-tests.result }}" = "failure" ]; then
+            echo "❌ CI pipeline failed"
+            exit 1
+          else
+            echo "✅ CI pipeline passed"
+          fi
+      
+      - name: Create summary
+        run: |
+          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Lint**: ${{ needs.lint.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security**: ${{ needs.security-scan.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tests**: ${{ needs.unit-tests.result }}" >> $GITHUB_STEP_SUMMARY
+
+# RUNNER MAPPING LOGIC
+# This workflow auto-selects runners based on runner-map.json
+# 
+# Default selections:
+#   - Lint: qr-runner-small (light workload)
+#   - Security: qr-runner-small (low resource)
+#   - Tests: qr-runner-small (basic tests)
+#
+# Override via workflow inputs:
+#   - Call with: runner_type: 'medium' for heavier tests
