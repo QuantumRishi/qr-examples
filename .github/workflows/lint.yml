@@ -1,0 +1,57 @@
+name: Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        include:
+          - name: Markdown
+            enabled: true
+          - name: YAML
+            enabled: true
+          - name: JSON
+            enabled: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: matrix.enabled
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        if: matrix.enabled
+        run: npm install markdownlint-cli yamllint
+
+      - name: Lint Markdown files
+        if: matrix.name == 'Markdown'
+        continue-on-error: true
+        run: |
+          npx markdownlint '**/*.md' --ignore node_modules --ignore .git || true
+
+      - name: Lint YAML files
+        if: matrix.name == 'YAML'
+        continue-on-error: true
+        run: |
+          find . -name '*.yml' -o -name '*.yaml' | grep -v node_modules | xargs yamllint -d relaxed || true
+
+      - name: Lint JSON files
+        if: matrix.name == 'JSON'
+        continue-on-error: true
+        run: |
+          find . -name '*.json' -not -path '*/node_modules/*' | while read file; do jq empty "$file" || echo "Invalid JSON: $file"; done || true
