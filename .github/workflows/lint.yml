@@ -48,10 +48,10 @@ jobs:
         if: matrix.name == 'YAML'
         continue-on-error: true
         run: |
-          find . -name '*.yml' -o -name '*.yaml' | grep -v node_modules | xargs yamllint -d relaxed || true
+          find . \( -name '*.yml' -o -name '*.yaml' \) ! -path '*/node_modules/*' -exec yamllint -d relaxed {} + || true
 
       - name: Lint JSON files
         if: matrix.name == 'JSON'
         continue-on-error: true
         run: |
-          find . -name '*.json' -not -path '*/node_modules/*' | while read file; do jq empty "$file" || echo "Invalid JSON: $file"; done || true
+          find . -name '*.json' ! -path '*/node_modules/*' -exec sh -c 'jq empty "$1" || echo "Invalid JSON: $1"' _ {} \; || true
