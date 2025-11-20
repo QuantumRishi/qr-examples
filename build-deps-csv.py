@@ -112,20 +112,30 @@ class DependencyScanner:
                     })
 
     def parse_package_json(self, content: str, file_path: Path) -> List[Tuple[str, str]]:
-        """Parse package.json using pre-compiled regex."""
+        """Parse package.json using JSON for accuracy and regex as fallback."""
         deps = []
-        in_deps = False
-        for line in content.split('\n'):
-            if '"dependencies"' in line or '"devDependencies"' in line:
-                in_deps = True
-                continue
-            if in_deps:
-                if '}' in line:
-                    in_deps = False
+        try:
+            import json
+            data = json.loads(content)
+            # Extract dependencies
+            for dep_type in ['dependencies', 'devDependencies', 'peerDependencies']:
+                if dep_type in data and isinstance(data[dep_type], dict):
+                    for name, version in data[dep_type].items():
+                        deps.append((name, version))
+        except (json.JSONDecodeError, ValueError):
+            # Fallback to regex parsing for malformed JSON
+            in_deps = False
+            for line in content.split('\n'):
+                if '"dependencies"' in line or '"devDependencies"' in line:
+                    in_deps = True
                     continue
-                match = PACKAGE_JSON_PATTERN.search(line)
-                if match:
-                    deps.append((match.group(1), match.group(2)))
+                if in_deps:
+                    if '}' in line:
+                        in_deps = False
+                        continue
+                    match = PACKAGE_JSON_PATTERN.search(line)
+                    if match:
+                        deps.append((match.group(1), match.group(2)))
         return deps
 
     def parse_package_lock(self, content: str, file_path: Path) -> List[Tuple[str, str]]:
@@ -201,13 +211,15 @@ class DependencyScanner:
         deps = []
         in_deps = False
         for line in content.split('\n'):
+            line_stripped = line.strip()
             if '[dependencies]' in line:
                 in_deps = True
                 continue
-            if in_deps and line.strip().startswith('['):
-                in_deps = False
             if in_deps:
-                match = CARGO_PATTERN.match(line)
+                if line_stripped.startswith('['):
+                    in_deps = False
+                    continue
+                match = CARGO_PATTERN.match(line_stripped)
                 if match:
                     deps.append((match.group(1), match.group(2)))
         return deps
@@ -244,20 +256,32 @@ class DependencyScanner:
         return deps
 
     def parse_composer(self, content: str, file_path: Path) -> List[Tuple[str, str]]:
-        """Parse composer.json (simplified)."""
+        """Parse composer.json using JSON for accuracy."""
         deps = []
-        in_require = False
-        for line in content.split('\n'):
-            if '"require"' in line:
-                in_require = True
-                continue
-            if in_require:
-                if '}' in line:
-                    in_require = False
+        try:
+            import json
+            data = json.loads(content)
+            # Extract dependencies
+            for dep_type in ['require', 'require-dev']:
+                if dep_type in data and isinstance(data[dep_type], dict):
+                    for name, version in data[dep_type].items():
+                        # Skip PHP itself
+                        if name != 'php':
+                            deps.append((name, version))
+        except (json.JSONDecodeError, ValueError):
+            # Fallback to regex parsing
+            in_require = False
+            for line in content.split('\n'):
+                if '"require"' in line:
+                    in_require = True
                     continue
-                match = PACKAGE_JSON_PATTERN.search(line)
-                if match:
-                    deps.append((match.group(1), match.group(2)))
+                if in_require:
+                    if '}' in line:
+                        in_require = False
+                        continue
+                    match = PACKAGE_JSON_PATTERN.search(line)
+                    if match:
+                        deps.append((match.group(1), match.group(2)))
         return deps
 
 
