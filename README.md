@@ -191,3 +191,7 @@ When adding new dependency parsers or features:
 ## License
 
 This code follows the organization's licensing terms.
+
+## Purpose in Cross-Repo Orchestration
+
+The qr-examples repository provides example applications, optimized scripts, and reference implementations for the Quantum Rishi ecosystem. It serves as a learning resource and template library, integrating with qr-templates for code templates, qr-devops for workflow examples, qr-apps for application examples, qr-docs for documentation examples, qr-education for learning examples, and qr-studio for development examples.
