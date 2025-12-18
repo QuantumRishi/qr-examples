@@ -7,3 +7,5 @@
   SUCCESS: Committed changes in qr-examples
   SUCCESS: Pushed qr-examples to cloud
   INFO: qr-examples has uncommitted changes, proceeding with commit
+  SUCCESS: Committed changes in qr-examples
+  ERROR: Failed to process qr-examples - Failed to push qr-examples
